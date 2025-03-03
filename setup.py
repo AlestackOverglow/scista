@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="scista",
-    version="0.1.2",
+    version="0.1.3",
     author="AlestackOverglow",
     author_email="alestackoverglow@proton.me",
     description="A library for fetching scientific articles from various sources",

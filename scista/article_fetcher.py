@@ -1,12 +1,14 @@
 import requests
 import urllib3
 import logging
+import io
+from PyPDF2 import PdfReader
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 __author__ = "AlestackOverglow"
 __email__ = "alestackoverglow@proton.me"
 class Article:
@@ -19,13 +21,15 @@ class Article:
         publication_date (str): Publication date
         text (str, optional): Full text or abstract of the article
         pdf_url (str, optional): URL to the PDF version of the article
+        url (str, optional): URL to the article webpage
     """
-    def __init__(self, title, doi, publication_date, text=None, pdf_url=None):
+    def __init__(self, title, doi, publication_date, text=None, pdf_url=None, url=None):
         self.title = title
         self.doi = doi
         self.publication_date = publication_date
         self.text = text
         self.pdf_url = pdf_url
+        self.url = url
 
     def save_pdf(self, path):
         """
@@ -40,18 +44,24 @@ class Article:
         if not self.pdf_url:
             logger.warning(f"No PDF for article: {self.title}")
             return False
+
         try:
-            response = requests.get(self.pdf_url, headers={"Accept": "application/pdf"})
-            if response.status_code == 200:
-                with open(path, "wb") as f:
-                    f.write(response.content)
-                logger.info(f"PDF saved: {path}")
-                return True
-            else:
-                logger.error(f"Error while downloading PDF: status {response.status_code}")
-                return False
+            # Set headers for getting PDF
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            }
+
+            # Download file
+            response = requests.get(self.pdf_url, headers=headers, allow_redirects=True, verify=False)
+            
+            # Save PDF
+            with open(path, "wb") as f:
+                f.write(response.content)
+            logger.info(f"PDF saved: {path}")
+            return True
+
         except Exception as e:
-            logger.error(f"Error while saving PDF: {e}")
+            logger.error(f"Error while saving PDF: {str(e)}")
             return False
 
     def __str__(self):
@@ -59,6 +69,7 @@ class Article:
                 f"DOI: {self.doi}\n"
                 f"Date: {self.publication_date}\n"
                 f"Text: {self.text[:200] if self.text else 'No text'}...\n"
+                f"URL: {self.url if self.url else 'No URL'}\n"
                 f"PDF URL: {self.pdf_url if self.pdf_url else 'No PDF'}")
 
 class ArticleFetcher:
@@ -152,8 +163,11 @@ class ArticleFetcher:
             doi = doi_raw.replace("https://doi.org/", "") if doi_raw else None
             title = article.get("title", "No title")
             pub_date = article.get("publication_date", "Unknown")
+            
+            # Get article URL from OpenAlex
+            url = article.get("primary_location", {}).get("landing_page_url") or doi_raw
 
-            text, pdf_url = self._get_content(title, doi)
+            text, pdf_url, content_url = self._get_content(title, doi)
             if not text and not pdf_url:
                 text = title
 
@@ -162,27 +176,28 @@ class ArticleFetcher:
                 doi=doi,
                 publication_date=pub_date,
                 text=text,
-                pdf_url=pdf_url
+                pdf_url=pdf_url,
+                url=content_url or url
             ))
 
         return articles
 
     def _get_content(self, title, doi):
         """Get article content from available sources."""
-        text, pdf_url = self._try_core(title)
+        text, pdf_url, url = self._try_core(title)
         if text:  # If text found in CORE
             if doi:  # Check Unpaywall for PDF
-                _, unpaywall_pdf = self._try_unpaywall(doi)
+                _, unpaywall_pdf, unpaywall_url = self._try_unpaywall(doi)
                 if unpaywall_pdf:  # If PDF found in Unpaywall, use it together with text from CORE
-                    return text, unpaywall_pdf
-            return text, pdf_url  # Otherwise return results from CORE
+                    return text, unpaywall_pdf, unpaywall_url or url
+            return text, pdf_url, url  # Otherwise return results from CORE
         
         if doi:  # If text not found in CORE, check Unpaywall
-            text, pdf_url = self._try_unpaywall(doi)
-            if pdf_url:
-                return text, pdf_url
+            text, pdf_url, url = self._try_unpaywall(doi)
+            if text or pdf_url or url:
+                return text, pdf_url, url
                 
-        return None, None
+        return None, None, None
 
     def _try_core(self, title):
         """Try to get article content from CORE."""
@@ -192,24 +207,47 @@ class ArticleFetcher:
             if response.status_code == 200:
                 data = response.json()
                 if data.get("results"):
-                    full_text = data["results"][0].get("fullText")
+                    result = data["results"][0]
+                    full_text = result.get("fullText")
+                    pdf_url = result.get("downloadUrl")
+                    url = result.get("sourceFulltextUrls", [None])[0] or result.get("sourceUrl")
+                    
+                    # Check PDF URL for validity
+                    if pdf_url:
+                        try:
+                            headers = {
+                                "Accept": "application/pdf",
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                            }
+                            head_response = requests.head(pdf_url, headers=headers, allow_redirects=True, verify=False, timeout=5)
+                            content_type = head_response.headers.get('content-type', '').lower()
+                            
+                            if 'pdf' not in content_type and 'octet-stream' not in content_type:
+                                logger.warning(f"CORE: Invalid PDF content type: {content_type}")
+                                pdf_url = None
+                        except Exception as e:
+                            logger.warning(f"CORE: Failed to validate PDF URL: {e}")
+                            pdf_url = None
+                    
                     if full_text:
                         logger.info(f"CORE: Text found for '{title}'")
-                        return full_text, None
-                    pdf_url = data["results"][0].get("downloadUrl")
                     if pdf_url:
-                        logger.info(f"CORE: PDF URL found for '{title}'")
-                        return None, pdf_url
+                        logger.info(f"CORE: Valid PDF URL found for '{title}'")
+                    if url:
+                        logger.info(f"CORE: Article URL found for '{title}'")
+                    
+                    return full_text, pdf_url, url
+                    
             logger.debug(f"CORE: Nothing found for '{title}'")
-            return None, None
+            return None, None, None
         except Exception as e:
             logger.error(f"Error while fetching from CORE: {e}")
-            return None, None
+            return None, None, None
 
     def _try_unpaywall(self, doi):
         """Try to get article content from Unpaywall."""
         if not doi:
-            return None, None
+            return None, None, None
             
         unpaywall_url = f"https://api.unpaywall.org/v2/{doi}?email={self.email}"
         try:
@@ -218,23 +256,43 @@ class ArticleFetcher:
                 data = response.json()
                 if not data:
                     logger.debug(f"Unpaywall: No data for DOI {doi}")
-                    return None, None
+                    return None, None, None
                     
                 best_oa_location = data.get("best_oa_location", {})
                 if not best_oa_location:
                     logger.debug(f"Unpaywall: No open access for DOI {doi}")
-                    return None, None
+                    return None, None, None
                     
-                pdf_url = best_oa_location.get("url_for_pdf") or best_oa_location.get("url")
-                text = data.get("abstract")  # Get text from abstract
+                pdf_url = best_oa_location.get("url_for_pdf")
+                url = best_oa_location.get("url") or data.get("url")
+                text = data.get("abstract")
+                
+                # Check PDF URL for validity
+                if pdf_url:
+                    try:
+                        headers = {
+                            "Accept": "application/pdf",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        }
+                        head_response = requests.head(pdf_url, headers=headers, allow_redirects=True, verify=False, timeout=5)
+                        content_type = head_response.headers.get('content-type', '').lower()
+                        
+                        if 'pdf' not in content_type and 'octet-stream' not in content_type:
+                            logger.warning(f"Unpaywall: Invalid PDF content type: {content_type}")
+                            pdf_url = None
+                    except Exception as e:
+                        logger.warning(f"Unpaywall: Failed to validate PDF URL: {e}")
+                        pdf_url = None
                 
                 if pdf_url:
-                    logger.info(f"Unpaywall: PDF found for DOI {doi}")
-                    return text, pdf_url  # Return text together with PDF URL
-                logger.debug(f"Unpaywall: No PDF for DOI {doi}")
+                    logger.info(f"Unpaywall: Valid PDF found for DOI {doi}")
+                if url:
+                    logger.info(f"Unpaywall: Article URL found for DOI {doi}")
+                    
+                return text, pdf_url, url
             else:
                 logger.error(f"Unpaywall: Error while requesting DOI {doi}, status: {response.status_code if response else 'No response'}")
-            return None, None
+            return None, None, None
         except Exception as e:
             logger.error(f"Unpaywall: Error: {str(e)}")
-            return None, None
+            return None, None, None
