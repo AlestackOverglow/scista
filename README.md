@@ -2,6 +2,22 @@
 
 Scista - Python library for searching and downloading scientific articles from various sources, including OpenAlex, CORE and Unpaywall.
 
+## Table of Contents
+- [Functionality](#functionality)
+- [Installation](#installation)
+- [Requirements](#requirements)
+- [Search Filters](#search-filters)
+  - [Filter Details](#filter-details)
+- [Return Values](#return-values)
+  - [Example of returned data](#example-of-returned-data)
+  - [Notes about returned data](#notes-about-returned-data)
+- [Methods](#methods)
+  - [Article class methods](#article-class-methods)
+- [Usage](#usage)
+- [Logging](#logging)
+- [License](#license)
+- [Author](#author)
+
 ## Functionality
 
 - Search for articles by topic, category and date
@@ -80,6 +96,7 @@ class Article:
     publication_date: str # Publication date in YYYY-MM-DD format
     text: str | None     # Full text or abstract (if available)
     pdf_url: str | None  # URL to download PDF (if available)
+    url: str | None      # URL to the article webpage
 ```
 
 ### Example of returned data:
@@ -94,6 +111,7 @@ print(article)
 # DOI: 10.1234/example.doi.2023
 # Date: 2023-12-25
 # Text: This paper explores the fundamentals of quantum computing...
+# URL: https://example.com/article
 # PDF URL: https://example.com/article.pdf
 
 # Access individual fields
@@ -101,6 +119,7 @@ print(article.title)           # Get article title
 print(article.doi)            # Get DOI
 print(article.publication_date)# Get publication date
 print(article.text)           # Get full text/abstract
+print(article.url)            # Get article webpage URL
 print(article.pdf_url)        # Get PDF URL
 
 # Save PDF if available
@@ -112,6 +131,7 @@ if article.pdf_url:
 
 - `text`: Can contain either full text (from CORE) or abstract (from Unpaywall)
 - `pdf_url`: URL for PDF download, available if article is found in CORE or Unpaywall
+- `url`: URL to the article webpage, can be from OpenAlex, CORE, or Unpaywall
 - `doi`: May be None for some articles
 - `publication_date`: Always provided, but format may vary depending on source
 - Articles are returned in order specified by `sort_by_date` parameter
