@@ -28,7 +28,7 @@ Scista - Python library for searching and downloading scientific articles from v
 ## Installation
 
 ```bash
-pip install scista
+pip install scista==0.1.3
 ```
 
 ## Requirements
